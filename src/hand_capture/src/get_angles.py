@@ -155,18 +155,19 @@ joints_pub = rospy.Publisher('/hand_capture/joints', JointState, queue_size=10)
 
 joints_offset = np.append(np.zeros(16), np.radians([0.0, 0.0, 0.0, 0.0])) # TODO: thumb offsets
 
+rospy.loginfo('creating annotated frame topic')
+frame_pub = rospy.Publisher('/hand_capture/frame', Image, queue_size=10)
+
 rospy.loginfo('subscribing to camera topic')
 bridge = CvBridge()
 seq = 0
 # while True:
 def frame_cb(data):
-    img = bridge.imgmsg_to_cv2(data, 'bgr8')
+    img = bridge.imgmsg_to_cv2(data, 'rgb8')
     # _, img = cap.read()
     img = cv2.flip(img, 1)
-    height, width, _ = img.shape
-    imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-    results = hands.process(imgRGB)
+    
+    results = hands.process(img)
     handedness = results.multi_handedness
     # if handedness is not None: print(handedness)
     
@@ -241,8 +242,8 @@ def frame_cb(data):
 
     # cv2.putText(img, text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
 
-    cv2.imshow('Camera', img)
-    cv2.waitKey(1)
+    frame_pub.publish(bridge.cv2_to_imgmsg(img, 'rgb8'))    
+
 rospy.Subscriber('/camera/image_raw', Image, frame_cb)
 
 rospy.spin()

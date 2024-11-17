@@ -8,4 +8,6 @@
 
     <include file="$(find graspit_interface)/launch/graspit_interface.launch"/>
     <node name="fwd_graspit" pkg="hand_capture" type="fwd_graspit.py" output="screen" required="true"/>
+
+    <node name="rqt_image_view" pkg="rqt_image_view" type="rqt_image_view" args="/hand_capture/frame"/>
 </launch>
