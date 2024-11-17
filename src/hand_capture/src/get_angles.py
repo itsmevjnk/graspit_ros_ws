@@ -151,7 +151,7 @@ def rotateZ4(ang):
 rospy.loginfo('setting up joint state publisher')
 joints_pub = rospy.Publisher('/hand_capture/joints', JointState, queue_size=10)
 
-joints_offset = np.append(np.zeros(16), np.radians([75.0, 0.0, 0.0, 0.0])) # TODO: thumb offsets
+joints_offset = np.append(np.zeros(16), np.radians([0.0, 0.0, 0.0, 0.0])) # TODO: thumb offsets
 
 seq = 0
 while True:
@@ -196,14 +196,14 @@ while True:
 
             # calculate thumb
             cmcIndex = 1
-            #wrist_cmc = np.asarray(landmarksHF_rot[0:3,cmcIndex]).reshape(-1) # wrist-CMC
-            #cmc_mcp = np.asarray(landmarksHF_rot[0:3,cmcIndex+1] - landmarksHF_rot[0:3,cmcIndex]).reshape(-1) # CMC-MCP
-            #thumb_norm = np.cross(cmc_mcp, wrist_cmc) # thumb plane normal
-            #cmc_flex = vect_angle(thumb_norm, np.array([0., 0., 1.]))
-
+            cmc_wrist = -np.asarray(landmarksHF_rot[0:3,cmcIndex]).reshape(-1) # CMC-wrist
             cmc_mcp = np.asarray(landmarksHF_rot[0:3,cmcIndex+1] - landmarksHF_rot[0:3,cmcIndex]).reshape(-1) # CMC-MCP
-            cmc_mcp[0] = 0 # X = 0 (project onto YZ plane)
-            cmc_flex = vect_angle(cmc_mcp, np.array([0., -1., 0.]))
+            thumb_norm = np.cross(cmc_wrist, cmc_mcp) # thumb plane normal
+            cmc_flex = vect_angle(thumb_norm, np.array([0., 0., 1.]))
+
+            # cmc_mcp = np.asarray(landmarksHF_rot[0:3,cmcIndex+1] - landmarksHF_rot[0:3,cmcIndex]).reshape(-1) # CMC-MCP
+            # cmc_mcp[0] = 0 # X = 0 (project onto YZ plane)
+            # cmc_flex = vect_angle(cmc_mcp, np.array([0., -1., 0.]))
 
             thumbFrame_tf = np.matmul(handFrame, np.matmul(rotateX4(np.degrees(180) - cmc_flex), np.linalg.inv(handFrame))) # transformation matrix from hand frame to thumb frame
             
@@ -217,7 +217,7 @@ while True:
 
             joints = np.append(joints, [cmc_flex, 0.0, 0.0, 0.0]) # TODO: thumb
 
-            joints = (joints - joints_offset).tolist()
+            joints = (joints + joints_offset).tolist()
             rospy.loginfo(f'Thumb: {" ".join([str(math.degrees(j)) for j in joints[-4:]])}')
 
             joints_pub.publish(JointState(
