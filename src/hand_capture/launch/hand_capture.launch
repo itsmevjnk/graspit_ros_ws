@@ -1,0 +1,11 @@
+<launch>
+    <node name="camera" pkg="usb_cam" type="usb_cam_node" output="screen" required="true">
+        <param name="camera_name" value="camera"/>
+        <param name="camera_name_id" value="camera"/>
+    </node>
+
+    <node name="get_angles" pkg="hand_capture" type="get_angles.py" output="screen" required="true"/>
+
+    <include file="$(find graspit_interface)/launch/graspit_interface.launch"/>
+    <node name="fwd_graspit" pkg="hand_capture" type="fwd_graspit.py" output="screen" required="true"/>
+</launch>

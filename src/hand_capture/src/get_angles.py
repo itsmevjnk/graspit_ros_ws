@@ -9,8 +9,10 @@ import math
 import rospy
 import rospkg
 
+from cv_bridge import CvBridge, CvBridgeError
+
 from std_msgs.msg import Header
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Image
 
 rospy.init_node('get_angles', anonymous=True)
 
@@ -18,7 +20,7 @@ basepath = rospkg.RosPack().get_path('hand_capture')
 
 import matplotlib.pyplot as plt
 
-cap = cv2.VideoCapture(0)
+# cap = cv2.VideoCapture(0)
 
 mpHands = mp.solutions.hands
 hands = mpHands.Hands()
@@ -90,9 +92,9 @@ def get_frame_origin(frame):
 def draw_frame(img, frame, length = 0.25, thickness = 2, ptO = None):
     if ptO is None: ptO = get_frame_origin(frame)
 
-    draw_vector(img, ptO, frame[:3,0].flatten(), (0, 0, 255), length, thickness)
+    draw_vector(img, ptO, frame[:3,0].flatten(), (255, 0, 0), length, thickness)
     draw_vector(img, ptO, frame[:3,1].flatten(), (0, 255, 0), length, thickness)
-    draw_vector(img, ptO, frame[:3,2].flatten(), (255, 0, 0), length, thickness)
+    draw_vector(img, ptO, frame[:3,2].flatten(), (0, 0, 255), length, thickness)
 
 def vect_angle(a, b):
     return np.arccos(a.dot(b) / (np.sqrt(a.dot(a)) * np.sqrt(b.dot(b))))
@@ -153,9 +155,13 @@ joints_pub = rospy.Publisher('/hand_capture/joints', JointState, queue_size=10)
 
 joints_offset = np.append(np.zeros(16), np.radians([0.0, 0.0, 0.0, 0.0])) # TODO: thumb offsets
 
+rospy.loginfo('subscribing to camera topic')
+bridge = CvBridge()
 seq = 0
-while True:
-    _, img = cap.read()
+# while True:
+def frame_cb(data):
+    img = bridge.imgmsg_to_cv2(data, 'bgr8')
+    # _, img = cap.read()
     img = cv2.flip(img, 1)
     height, width, _ = img.shape
     imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -220,6 +226,7 @@ while True:
             joints = (joints + joints_offset).tolist()
             rospy.loginfo(f'Thumb: {" ".join([str(math.degrees(j)) for j in joints[-4:]])}')
 
+            global seq
             joints_pub.publish(JointState(
                 Header(seq, rospy.Time.now(), ''),
                 '',
@@ -234,10 +241,8 @@ while True:
 
     # cv2.putText(img, text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
 
-    plt.pause(.001)
     cv2.imshow('Camera', img)
-    key = cv2.waitKey(1) & 0xFF
-    if key == ord('q'): break
+    cv2.waitKey(1)
+rospy.Subscriber('/camera/image_raw', Image, frame_cb)
 
-cap.release()
-cv2.destroyAllWindows()
+rospy.spin()
