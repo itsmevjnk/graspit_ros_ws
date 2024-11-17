@@ -2,6 +2,3 @@
 	path = src/graspit_interface
 	url = https://github.com/graspit-simulator/graspit_interface.git
 	branch = noetic-devel
-[submodule "src/graspit_commander"]
-	path = src/graspit_commander
-	url = https://github.com/graspit-simulator/graspit_commander.git
