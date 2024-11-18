@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import cv2
-import mediapipe as mp
 import numpy as np
 import time
 import math
 
+import mediapipe as mp
+from mediapipe import solutions
+from mediapipe.framework.formats import landmark_pb2
 import rospy
 import rospkg
 
@@ -52,11 +54,11 @@ def normalise_vect(a, axis = -1, order = 2):
 
 # build hand coordinate frame
 def build_frame(hand, left = True):
-    wrist = hand.landmark[0]; wristCV = make_vect(wrist) # CV = coordinate vector
-    pinkyMCP = hand.landmark[17]; pinkyCV = make_vect(pinkyMCP); pinkyVect = pinkyCV - wristCV
-    indexMCP = hand.landmark[5]; indexCV = make_vect(indexMCP) ; indexVect = indexCV - wristCV
+    wrist = hand[0]; wristCV = make_vect(wrist) # CV = coordinate vector
+    pinkyMCP = hand[17]; pinkyCV = make_vect(pinkyMCP); pinkyVect = pinkyCV - wristCV
+    indexMCP = hand[5]; indexCV = make_vect(indexMCP) ; indexVect = indexCV - wristCV
     
-    if left: zVect = np.cross(indexVect, pinkyVect) # Z vector originating from wrist, positive = palm side
+    if not left: zVect = np.cross(indexVect, pinkyVect) # Z vector originating from wrist, positive = palm side
     else: zVect = np.cross(pinkyVect, indexVect)
     zVect_norm = normalise_vect(zVect)
     xVect = normalise_vect(pinkyVect) + normalise_vect(indexVect); xVect_norm = normalise_vect(xVect) # X vector is angle bisector of pinky and index knuckle vectors
@@ -158,27 +160,65 @@ joints_offset = np.append(np.zeros(16), np.radians([0.0, 0.0, 0.0, 0.0])) # TODO
 rospy.loginfo('creating annotated frame topic')
 frame_pub = rospy.Publisher('/hand_capture/frame', Image, queue_size=10)
 
+rospy.loginfo('setting up MediaPipe')
+BaseOptions = mp.tasks.BaseOptions
+HandLandmarker = mp.tasks.vision.HandLandmarker
+HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
+VisionRunningMode = mp.tasks.vision.RunningMode
+landmarker = HandLandmarker.create_from_options(HandLandmarkerOptions(
+    base_options = BaseOptions(model_asset_path=f'{basepath}/hand_landmarker.task'),
+    running_mode = VisionRunningMode.VIDEO
+))
+
+# https://github.com/google-ai-edge/mediapipe/issues/5361#issuecomment-2092489424
+def draw_landmarks_on_image(rgb_image, detection_result):
+  hand_landmarks_list = detection_result.hand_landmarks
+  handedness_list = detection_result.handedness
+  annotated_image = rgb_image # NOTE: in-place drawing
+
+  # Loop through the detected hands to visualize.
+  for idx in range(len(hand_landmarks_list)):
+    hand_landmarks = hand_landmarks_list[idx]
+
+    # Draw the hand landmarks.
+    hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+    hand_landmarks_proto.landmark.extend([
+      landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
+    ])
+    solutions.drawing_utils.draw_landmarks(
+      annotated_image,
+      hand_landmarks_proto,
+      solutions.hands.HAND_CONNECTIONS,
+      solutions.drawing_styles.get_default_hand_landmarks_style(),
+      solutions.drawing_styles.get_default_hand_connections_style())
+
+  return annotated_image
+
 rospy.loginfo('subscribing to camera topic')
 bridge = CvBridge()
 seq = 0
 # while True:
 def frame_cb(data):
+    now = rospy.Time.now()
+
     img = bridge.imgmsg_to_cv2(data, 'rgb8')
     # _, img = cap.read()
-    img = cv2.flip(img, 1)
+    # img = cv2.flip(img, 1)
     
-    results = hands.process(img)
-    handedness = results.multi_handedness
-    # if handedness is not None: print(handedness)
+    imgMP = mp.Image(image_format=mp.ImageFormat.SRGB, data=img)
+    results = landmarker.detect_for_video(imgMP, int(now.secs * 1000 + now.nsecs / 1000000))
+    handedness = results.handedness
+    # if handedness is not None: rospy.loginfo(str(handedness))
     
-    if results.multi_hand_landmarks:
-        for iHand, hand in enumerate(results.multi_hand_landmarks):
-            left = handedness[iHand].classification[0].label == 'Left'
-            if left: continue # TODO
+    if results.hand_world_landmarks:
+        for iHand, hand in enumerate(results.hand_landmarks): # TODO
+            # left = handedness[iHand].categoryName == 'Left'
+            # if left: continue # TODO
+            left = False
 
             handFrame = build_frame(hand, left) # build hand frame
-            wrist = make_vect(hand.landmark[0])
-            landmarksHF = landmarksHF_rot = np.matmul(np.linalg.inv(handFrame), np.array([np.append(make_vect(hand.landmark[i]) - wrist, [1.]) for i in range(21)]).T) # landmarks in hand frame
+            wrist = make_vect(hand[0])
+            landmarksHF = landmarksHF_rot = np.matmul(np.linalg.inv(handFrame), np.array([np.append(make_vect(hand[i]) - wrist, [1.]) for i in range(21)]).T) # landmarks in hand frame
             # landmarksHF_rot = np.matmul(rot_matrix, landmarksHF) # rotate to align palm planes
             # print(landmarksHF_rot)
 
@@ -186,7 +226,7 @@ def frame_cb(data):
                 # MCP-PIP
                 mcp_pip = np.asarray(landmarksHF_rot[0:3,mcpIndex+1] - landmarksHF_rot[0:3,mcpIndex]).reshape(-1)
                 # print(mcp_pip)
-                mcpAbduct = np.arctan(mcp_pip[1] / mcp_pip[0]) # y / x
+                mcpAbduct = np.arctan(-mcp_pip[1] / mcp_pip[0]) # y / x
                 mcpFlex = np.arctan(mcp_pip[2] / np.sqrt(mcp_pip[0] ** 2 + mcp_pip[1] ** 2)) # z / sqrt(x^2+y^2)
 
                 # PIP-DIP
@@ -215,9 +255,9 @@ def frame_cb(data):
             thumbFrame_tf = np.matmul(handFrame, np.matmul(rotateX4(np.degrees(180) - cmc_flex), np.linalg.inv(handFrame))) # transformation matrix from hand frame to thumb frame
             
             # thumbFrame = np.matmul(handFrame, rotateX4(np.degrees(180) - cmc_flex)) # HF * Rx * HF^-1 * HF (Thm 1.5)
-            # draw_frame(img, thumbFrame, 0.15, ptO = make_vect(hand.landmark[cmcIndex]))
+            # draw_frame(img, thumbFrame, 0.15, ptO = make_vect(hand[cmcIndex]))
             
-            #cmcPoint = make_vect(hand.landmark[cmcIndex])
+            #cmcPoint = make_vect(hand[cmcIndex])
             #draw_vector(img, cmcPoint, cmc_mcp, (255, 255, 0))
             # draw_vector(img, cmcPoint, zVect, (0, 255, 255))
             #draw_vector(img, cmcPoint, np.array(np.matmul(handFrame, np.append(thumb_norm, [1.]))).flatten(), (255, 0, 255))            
@@ -229,18 +269,19 @@ def frame_cb(data):
 
             global seq
             joints_pub.publish(JointState(
-                Header(seq, rospy.Time.now(), ''),
+                Header(seq, now, ''),
                 '',
                 joints,
                 [], []
             ))
             seq += 1
 
-            mpDraw.draw_landmarks(img, hand, mpHands.HAND_CONNECTIONS)
+            # mpDraw.draw_landmarks(img, hand, mpHands.HAND_CONNECTIONS)
 
-            draw_frame(img, handFrame)
+            draw_frame(img, handFrame, ptO = wrist)
 
-    # cv2.putText(img, text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
+        # cv2.putText(img, text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
+        draw_landmarks_on_image(img, results)
 
     frame_pub.publish(bridge.cv2_to_imgmsg(img, 'rgb8'))    
 
